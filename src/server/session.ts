@@ -140,6 +140,9 @@ export async function startSession(env: Env, session: Session): Promise<{ ruId: 
       { request, response: ru }
     );
   } else {
+    if (existing.length > 1) {
+      console.warn(`[startSession] ${existing.length} RUs match ${session.originUserId}; using the first.`);
+    }
     ruId = existing[0].id;
     bus.emit("agent_handler", "ru_exists", `RU ${ruId} already exists for ${session.name}`, {
       registeredUser: existing[0],
@@ -154,8 +157,8 @@ export async function resetSession(env: Env, session: Session): Promise<Session>
   if (session.ruId) {
     try {
       await ah.deleteRegisteredUser(env, session.ruId);
-    } catch {
-      // best-effort; reset must always succeed for the demo
+    } catch (err) {
+      console.warn("[reset] deleteRegisteredUser failed (best-effort):", err);
     }
   }
   bus.clear();

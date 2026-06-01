@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 import { bus } from "./eventBus";
-import { createSession, runTurn, startSession } from "./session";
+import { createSession, runTurn, startSession, resetSession } from "./session";
 import type { Env } from "./types";
 import * as ah from "./agentHandler";
 import * as gateway from "./gateway";
@@ -85,5 +85,42 @@ describe("startSession", () => {
     expect(ruId).toBe("ru_new");
     expect(s.ruId).toBe("ru_new");
     expect(bus.getLog().map((e) => e.kind)).toEqual(["login", "ru_lookup", "ru_create"]);
+  });
+});
+
+describe("startSession (existing RU)", () => {
+  it("reuses an existing RU and emits ru_exists without creating", async () => {
+    bus.clear();
+    const s = createSession(env);
+    vi.spyOn(ah, "listRegisteredUsers").mockResolvedValue([
+      { id: "ru_existing", origin_user_id: env.DEMO_USER_ORIGIN_ID },
+    ]);
+    const createSpy = vi.spyOn(ah, "createRegisteredUser");
+
+    const { ruId, created } = await startSession(env, s);
+
+    expect(created).toBe(false);
+    expect(ruId).toBe("ru_existing");
+    expect(s.ruId).toBe("ru_existing");
+    expect(createSpy).not.toHaveBeenCalled();
+    expect(bus.getLog().map((e) => e.kind)).toEqual(["login", "ru_lookup", "ru_exists"]);
+  });
+});
+
+describe("resetSession", () => {
+  it("deletes the RU, clears the bus, and returns a fresh session", async () => {
+    bus.clear();
+    const s = createSession(env);
+    s.ruId = "ru_old";
+    s.history.push({ type: "message", role: "user", content: "hi" });
+    const delSpy = vi.spyOn(ah, "deleteRegisteredUser").mockResolvedValue(undefined);
+    bus.emit("identity", "login", "noise");
+
+    const fresh = await resetSession(env, s);
+
+    expect(delSpy).toHaveBeenCalledWith(env, "ru_old");
+    expect(bus.getLog()).toEqual([]);
+    expect(fresh.ruId).toBeNull();
+    expect(fresh.history).toHaveLength(1); // system message only
   });
 });
