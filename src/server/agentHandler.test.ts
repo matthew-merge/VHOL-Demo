@@ -44,4 +44,9 @@ describe("agentHandler.callTool", () => {
       "https://ah-api.merge.dev/api/v1/tool-packs/tp_1/registered-users/ru_9/mcp/"
     );
   });
+
+  it("throws on non-ok response", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("nope", { status: 500, statusText: "ERR" })));
+    await expect(callTool(env, "ru_9", "x", {})).rejects.toThrow(/Agent Handler 500/);
+  });
 });

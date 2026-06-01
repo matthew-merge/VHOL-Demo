@@ -12,6 +12,11 @@ describe("detectRedactions", () => {
     expect(hits.some((h) => h.includes("SSN"))).toBe(true);
   });
 
+  it("flags the other redaction markers", () => {
+    expect(detectRedactions("a ***REDACTED*** b")).toContain("***REDACTED***");
+    expect(detectRedactions("a <redacted> b")).toContain("<redacted>");
+  });
+
   it("returns [] for clean text", () => {
     expect(detectRedactions("order shipped on 6/3")).toEqual([]);
   });

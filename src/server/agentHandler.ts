@@ -47,6 +47,8 @@ export async function callTool(
   if (!res.ok) {
     throw new Error(`Agent Handler ${res.status} ${res.statusText}: ${await res.text()}`);
   }
-  const data = (await res.json()) as { result: { content: { text: string }[] } };
-  return data.result.content[0].text;
+  const data = (await res.json()) as { result: { content: { text?: string }[] } };
+  const item = data.result?.content?.[0];
+  if (!item) throw new Error("Agent Handler: empty content in tool result");
+  return item.text ?? JSON.stringify(item);
 }
