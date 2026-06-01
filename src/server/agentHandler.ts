@@ -1,4 +1,4 @@
-import type { Env, Tool } from "./types";
+import type { Env, Tool, RegisteredUser } from "./types";
 
 const MAX_INTENT_LEN = 300;
 
@@ -51,4 +51,37 @@ export async function callTool(
   const item = data.result?.content?.[0];
   if (!item) throw new Error("Agent Handler: empty content in tool result");
   return item.text ?? JSON.stringify(item);
+}
+
+// ---- Registered User management (org-level; not tool-pack scoped) ----
+
+const RU_URL = "https://ah-api.merge.dev/api/v1/registered-users/";
+
+export interface NewRegisteredUser {
+  id: string;
+  origin_user_id: string;
+  origin_user_name: string;
+  shared_credential_group?: { origin_company_id?: string | null; origin_company_name?: string | null };
+  user_type?: "HUMAN" | "SYSTEM";
+}
+
+export async function listRegisteredUsers(env: Env, originUserId: string): Promise<RegisteredUser[]> {
+  const url = `${RU_URL}?origin_user_id=${encodeURIComponent(originUserId)}`;
+  const res = await fetch(url, { headers: authHeaders(env) });
+  if (!res.ok) throw new Error(`AH list RU ${res.status} ${res.statusText}: ${await res.text()}`);
+  const data = (await res.json()) as { results?: RegisteredUser[] };
+  return data.results ?? [];
+}
+
+export async function createRegisteredUser(env: Env, ru: NewRegisteredUser): Promise<RegisteredUser> {
+  const res = await fetch(RU_URL, { method: "POST", headers: authHeaders(env), body: JSON.stringify(ru) });
+  if (!res.ok) throw new Error(`AH create RU ${res.status} ${res.statusText}: ${await res.text()}`);
+  return (await res.json()) as RegisteredUser;
+}
+
+export async function deleteRegisteredUser(env: Env, id: string): Promise<void> {
+  const res = await fetch(`${RU_URL}${id}/`, { method: "DELETE", headers: authHeaders(env) });
+  if (!res.ok && res.status !== 404) {
+    throw new Error(`AH delete RU ${res.status} ${res.statusText}: ${await res.text()}`);
+  }
 }

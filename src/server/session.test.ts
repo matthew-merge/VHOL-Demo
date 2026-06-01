@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 import { bus } from "./eventBus";
-import { createSession, runTurn } from "./session";
+import { createSession, runTurn, startSession } from "./session";
 import type { Env } from "./types";
 import * as ah from "./agentHandler";
 import * as gateway from "./gateway";
@@ -70,5 +70,20 @@ describe("runTurn", () => {
     expect(text).toBe("Hi Richard!");
     expect(bus.getLog().map((e) => e.kind)).toEqual(["tool_search", "route", "message"]);
     expect(s.history.length).toBe(3); // system + user + assistant(text)
+  });
+});
+
+describe("startSession", () => {
+  it("creates an RU when none exists and emits identity + lookup + create", async () => {
+    bus.clear();
+    const s = createSession(env);
+    vi.spyOn(ah, "listRegisteredUsers").mockResolvedValue([]);
+    vi.spyOn(ah, "createRegisteredUser").mockResolvedValue({ id: "ru_new", origin_user_id: env.DEMO_USER_ORIGIN_ID });
+
+    const { ruId, created } = await startSession(env, s);
+    expect(created).toBe(true);
+    expect(ruId).toBe("ru_new");
+    expect(s.ruId).toBe("ru_new");
+    expect(bus.getLog().map((e) => e.kind)).toEqual(["login", "ru_lookup", "ru_create"]);
   });
 });

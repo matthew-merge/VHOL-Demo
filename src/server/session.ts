@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { randomUUID } from "node:crypto";
 import { bus } from "./eventBus";
 import * as gateway from "./gateway";
 import * as ah from "./agentHandler";
@@ -101,4 +102,62 @@ export async function runTurn(env: Env, session: Session, userMessage: string): 
       return finalText;
     }
   }
+}
+
+export async function startSession(env: Env, session: Session): Promise<{ ruId: string; created: boolean }> {
+  bus.emit(
+    "identity",
+    "login",
+    `${session.name} logged in — ${session.company} · ${session.originUserId}`,
+    { name: session.name, company: session.company, originUserId: session.originUserId }
+  );
+
+  const existing = await ah.listRegisteredUsers(env, session.originUserId);
+  bus.emit(
+    "agent_handler",
+    "ru_lookup",
+    `GET registered-users?origin_user_id=${session.originUserId} → ${existing.length} result(s)`,
+    { count: existing.length, results: existing }
+  );
+
+  let ruId: string;
+  let created = false;
+  if (existing.length === 0) {
+    const request = {
+      id: randomUUID(),
+      origin_user_id: session.originUserId,
+      origin_user_name: session.name,
+      shared_credential_group: { origin_company_id: session.companyId, origin_company_name: session.company },
+      user_type: "HUMAN" as const,
+    };
+    const ru = await ah.createRegisteredUser(env, request);
+    ruId = ru.id;
+    created = true;
+    bus.emit(
+      "agent_handler",
+      "ru_create",
+      `POST registered-users → 201 · RU ${ru.id} created under ${session.company}`,
+      { request, response: ru }
+    );
+  } else {
+    ruId = existing[0].id;
+    bus.emit("agent_handler", "ru_exists", `RU ${ruId} already exists for ${session.name}`, {
+      registeredUser: existing[0],
+    });
+  }
+
+  session.ruId = ruId;
+  return { ruId, created };
+}
+
+export async function resetSession(env: Env, session: Session): Promise<Session> {
+  if (session.ruId) {
+    try {
+      await ah.deleteRegisteredUser(env, session.ruId);
+    } catch {
+      // best-effort; reset must always succeed for the demo
+    }
+  }
+  bus.clear();
+  return createSession(env);
 }
