@@ -54,6 +54,7 @@ describe("runTurn", () => {
     expect(kinds).toEqual([
       "tool_search", "route", "tool_call", "tool_result", "route", "message",
     ]);
+    expect(s.history.length).toBe(5); // system + user + assistant(tool_use) + tool_result + assistant(text)
   });
 
   it("routes a trivial message with no tools straight to a reply", async () => {
@@ -68,5 +69,6 @@ describe("runTurn", () => {
     const text = await runTurn(env, s, "Hello");
     expect(text).toBe("Hi Richard!");
     expect(bus.getLog().map((e) => e.kind)).toEqual(["tool_search", "route", "message"]);
+    expect(s.history.length).toBe(3); // system + user + assistant(text)
   });
 });

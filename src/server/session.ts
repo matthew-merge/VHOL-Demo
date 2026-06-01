@@ -7,6 +7,8 @@ import * as ah from "./agentHandler";
 import { detectRedactions } from "./dlp";
 import type { Env, GatewayContentItem, HistoryItem } from "./types";
 
+const MAX_TURNS = 10;
+
 export interface Session {
   ruId: string | null;
   originUserId: string;
@@ -51,7 +53,9 @@ export async function runTurn(env: Env, session: Session, userMessage: string): 
     { intent: userMessage, tools: tools.map((t) => t.name) }
   );
 
+  let turns = 0;
   while (true) {
+    if (++turns > MAX_TURNS) throw new Error(`Exceeded ${MAX_TURNS} tool-call turns without a final response`);
     const response = await gateway.chat(env, session.model, session.history, tools);
     const returnedModel = response.model ?? "";
     if (returnedModel.includes("/")) session.model = returnedModel;
@@ -61,11 +65,13 @@ export async function runTurn(env: Env, session: Session, userMessage: string): 
     });
 
     const output = response.output[0];
+    if (!output) throw new Error("Gateway returned an empty output array");
     session.history.push(output as HistoryItem);
 
     if (output.finish_reason === "tool_use") {
       for (const item of output.content as GatewayContentItem[]) {
         if (item.type !== "tool_use") continue;
+        // Gateway guarantees `name`/`input` are present on tool_use items; ruId is non-null per the guard above.
         bus.emit("agent_handler", "tool_call", `${item.name}(…)`, {
           name: item.name,
           arguments: item.input,
@@ -86,9 +92,13 @@ export async function runTurn(env: Env, session: Session, userMessage: string): 
         session.history.push({ type: "tool_result", tool_use_id: item.id, content: result });
       }
     } else {
-      const text = (output.content[0] as GatewayContentItem).text ?? "";
-      bus.emit("response", "message", text, { text });
-      return text;
+      const text = (output.content[0] as GatewayContentItem | undefined)?.text ?? "";
+      if (!text) {
+        bus.emit("error", "error", "Gateway returned an empty final response", { output });
+      }
+      const finalText = text || "(no response)";
+      bus.emit("response", "message", finalText, { text: finalText });
+      return finalText;
     }
   }
 }
