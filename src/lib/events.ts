@@ -1,3 +1,5 @@
+import { useEffect, useState } from "react";
+
 export const EVENT_SOURCES = [
   "identity",
   "gateway",
@@ -37,4 +39,18 @@ export function isAgentEvent(value: unknown): value is AgentEvent {
     typeof e.source === "string" &&
     (EVENT_SOURCES as readonly string[]).includes(e.source)
   );
+}
+
+/** Subscribes to the server SSE feed and accumulates AgentEvents. */
+export function useEventStream(): AgentEvent[] {
+  const [events, setEvents] = useState<AgentEvent[]>([]);
+  useEffect(() => {
+    const source = new EventSource("/api/events");
+    source.onmessage = (msg) => {
+      const parsed: unknown = JSON.parse(msg.data);
+      if (isAgentEvent(parsed)) setEvents((prev) => [...prev, parsed]);
+    };
+    return () => source.close();
+  }, []);
+  return events;
 }
