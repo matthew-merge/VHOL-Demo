@@ -32,7 +32,7 @@ function chatHandler(env: Env, getSession: () => Session) {
       const text = await runTurn(env, getSession(), message);
       sendJson(res, 200, { text });
     } catch (err) {
-      bus.emit("error", "error", String(err), { detail: String(err) });
+      bus.emit("error", "error", String(err), { message: String(err) });
       sendJson(res, 500, { error: String(err) });
     }
   };
@@ -66,7 +66,7 @@ function sessionStartHandler(env: Env, getSession: () => Session) {
         originUserId: session.originUserId,
       });
     } catch (err) {
-      bus.emit("error", "error", String(err), { detail: String(err) });
+      bus.emit("error", "error", String(err), { message: String(err) });
       sendJson(res, 500, { error: String(err) });
     }
   };

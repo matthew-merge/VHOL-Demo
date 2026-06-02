@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import type { AgentEvent, EventSource } from "../../lib/events";
 
 const COLOR: Record<EventSource, string> = {
@@ -16,6 +17,11 @@ interface Props {
 }
 
 export default function EventList({ events, selectedId, onSelect }: Props) {
+  const endRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ block: "end" });
+  }, [events.length]);
+
   return (
     <div className="w-[44%] shrink-0 overflow-y-auto border-r border-neutral-800">
       {events.map((e) => (
@@ -30,6 +36,7 @@ export default function EventList({ events, selectedId, onSelect }: Props) {
           <span className="text-neutral-200">{e.summary}</span>
         </button>
       ))}
+      <div ref={endRef} />
     </div>
   );
 }
