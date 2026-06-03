@@ -1,34 +1,41 @@
-import { useState } from "react";
-import { sendChat } from "../../lib/api";
+import { useRef, useState } from "react";
+import { startSession, sendChat } from "../../lib/api";
 
 interface Msg {
   role: "user" | "assistant";
   text: string;
 }
 
-interface Props {
-  userName: string;
-  company: string;
-}
-
-export default function ChatWidget({ userName, company }: Props) {
+export default function ChatWidget() {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [ready, setReady] = useState(false);
+  const startedRef = useRef(false);
 
-  function openPanel() {
+  async function openPanel() {
     setOpen(true);
-    if (messages.length === 0) {
+    if (startedRef.current) return; // start the session exactly once
+    startedRef.current = true;
+    try {
+      const session = await startSession();
       setMessages([
-        { role: "assistant", text: `👋 Welcome, ${userName} from ${company}. How can I help with your store today?` },
+        {
+          role: "assistant",
+          text: `👋 Welcome, ${session.name} from ${session.company}. How can I help with your store today?`,
+        },
       ]);
+      setReady(true);
+    } catch (err) {
+      setMessages([{ role: "assistant", text: `⚠ Couldn't start your session: ${String(err)}` }]);
+      startedRef.current = false; // allow a retry on next open
     }
   }
 
   async function send() {
     const text = input.trim();
-    if (!text || busy) return;
+    if (!text || busy || !ready) return;
     setInput("");
     setMessages((m) => [...m, { role: "user", text }]);
     setBusy(true);
@@ -69,17 +76,24 @@ export default function ChatWidget({ userName, company }: Props) {
             {m.text}
           </div>
         ))}
+        {!ready && messages.length === 0 && <div className="text-neutral-400 text-xs">Connecting…</div>}
         {busy && <div className="text-neutral-400 text-xs">Acme Assistant is thinking…</div>}
       </div>
       <div className="border-t border-neutral-100 p-2 flex gap-2">
         <input
-          className="flex-1 text-sm outline-none px-2"
-          placeholder="Ask anything…"
+          className="flex-1 text-sm outline-none px-2 disabled:opacity-50"
+          placeholder={ready ? "Ask anything…" : "Connecting…"}
           value={input}
+          disabled={!ready}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && send()}
         />
-        <button aria-label="Send" onClick={send} className="text-blue-600 font-semibold text-sm px-2">
+        <button
+          aria-label="Send"
+          onClick={send}
+          disabled={!ready}
+          className="text-blue-600 font-semibold text-sm px-2 disabled:opacity-50"
+        >
           Send
         </button>
       </div>

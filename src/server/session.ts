@@ -18,6 +18,8 @@ export interface Session {
   companyId: string;
   history: HistoryItem[];
   model: string;
+  /** in-flight session-start promise; lets concurrent starts share one create */
+  starting?: Promise<{ ruId: string; created: boolean }> | null;
 }
 
 function systemPrompt(): string {
@@ -104,53 +106,66 @@ export async function runTurn(env: Env, session: Session, userMessage: string): 
   }
 }
 
-export async function startSession(env: Env, session: Session): Promise<{ ruId: string; created: boolean }> {
-  bus.emit(
-    "identity",
-    "login",
-    `${session.name} logged in — ${session.company} · ${session.originUserId}`,
-    { name: session.name, company: session.company, originUserId: session.originUserId }
-  );
+export function startSession(env: Env, session: Session): Promise<{ ruId: string; created: boolean }> {
+  // Idempotent: already-started → no-op; start in flight → share it.
+  if (session.ruId) return Promise.resolve({ ruId: session.ruId, created: false });
+  if (session.starting) return session.starting;
 
-  const existing = await ah.listRegisteredUsers(env, session.originUserId);
-  bus.emit(
-    "agent_handler",
-    "ru_lookup",
-    `GET registered-users?origin_user_id=${session.originUserId} → ${existing.length} result(s)`,
-    { count: existing.length, results: existing }
-  );
+  session.starting = (async () => {
+    bus.emit(
+      "identity",
+      "login",
+      `${session.name} logged in — ${session.company} · ${session.originUserId}`,
+      { name: session.name, company: session.company, originUserId: session.originUserId }
+    );
 
-  let ruId: string;
-  let created = false;
-  if (existing.length === 0) {
-    const request = {
-      id: randomUUID(),
-      origin_user_id: session.originUserId,
-      origin_user_name: session.name,
-      shared_credential_group: { origin_company_id: session.companyId, origin_company_name: session.company },
-      user_type: "HUMAN" as const,
-    };
-    const ru = await ah.createRegisteredUser(env, request);
-    ruId = ru.id;
-    created = true;
+    const existing = await ah.listRegisteredUsers(env, session.originUserId);
     bus.emit(
       "agent_handler",
-      "ru_create",
-      `POST registered-users → 201 · RU ${ru.id} created under ${session.company}`,
-      { request, response: ru }
+      "ru_lookup",
+      `GET registered-users?origin_user_id=${session.originUserId} → ${existing.length} result(s)`,
+      { count: existing.length, results: existing }
     );
-  } else {
-    if (existing.length > 1) {
-      console.warn(`[startSession] ${existing.length} RUs match ${session.originUserId}; using the first.`);
-    }
-    ruId = existing[0].id;
-    bus.emit("agent_handler", "ru_exists", `RU ${ruId} already exists for ${session.name}`, {
-      registeredUser: existing[0],
-    });
-  }
 
-  session.ruId = ruId;
-  return { ruId, created };
+    let ruId: string;
+    let created = false;
+    if (existing.length === 0) {
+      const request = {
+        id: randomUUID(),
+        origin_user_id: session.originUserId,
+        origin_user_name: session.name,
+        shared_credential_group: { origin_company_id: session.companyId, origin_company_name: session.company },
+        user_type: "HUMAN" as const,
+      };
+      const ru = await ah.createRegisteredUser(env, request);
+      ruId = ru.id;
+      created = true;
+      bus.emit(
+        "agent_handler",
+        "ru_create",
+        `POST registered-users → 201 · RU ${ru.id} created under ${session.company}`,
+        { request, response: ru }
+      );
+    } else {
+      if (existing.length > 1) {
+        console.warn(`[startSession] ${existing.length} RUs match ${session.originUserId}; using the first.`);
+      }
+      ruId = existing[0].id;
+      bus.emit("agent_handler", "ru_exists", `RU ${ruId} already exists for ${session.name}`, {
+        registeredUser: existing[0],
+      });
+    }
+
+    session.ruId = ruId;
+    return { ruId, created };
+  })();
+
+  // If the start fails, clear the in-flight promise so a later attempt can retry.
+  session.starting.catch(() => {
+    session.starting = null;
+  });
+
+  return session.starting;
 }
 
 export async function resetSession(env: Env, session: Session): Promise<Session> {

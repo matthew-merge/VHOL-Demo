@@ -124,3 +124,32 @@ describe("resetSession", () => {
     expect(fresh.history).toHaveLength(1); // system message only
   });
 });
+
+describe("startSession idempotency", () => {
+  it("creates the RU only once under concurrent calls", async () => {
+    bus.clear();
+    const s = createSession(env);
+    const listSpy = vi.spyOn(ah, "listRegisteredUsers").mockResolvedValue([]);
+    const createSpy = vi
+      .spyOn(ah, "createRegisteredUser")
+      .mockResolvedValue({ id: "ru_new", origin_user_id: env.DEMO_USER_ORIGIN_ID });
+
+    const [a, b] = await Promise.all([startSession(env, s), startSession(env, s)]);
+
+    expect(createSpy).toHaveBeenCalledTimes(1);
+    expect(listSpy).toHaveBeenCalledTimes(1);
+    expect(a).toEqual({ ruId: "ru_new", created: true });
+    expect(b).toEqual({ ruId: "ru_new", created: true });
+    expect(s.ruId).toBe("ru_new");
+    expect(bus.getLog().map((e) => e.kind)).toEqual(["login", "ru_lookup", "ru_create"]);
+  });
+
+  it("short-circuits when the session already has an RU", async () => {
+    const s = createSession(env);
+    s.ruId = "ru_existing";
+    const listSpy = vi.spyOn(ah, "listRegisteredUsers");
+    const r = await startSession(env, s);
+    expect(r).toEqual({ ruId: "ru_existing", created: false });
+    expect(listSpy).not.toHaveBeenCalled();
+  });
+});
