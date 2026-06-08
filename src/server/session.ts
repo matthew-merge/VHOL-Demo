@@ -6,9 +6,53 @@ import { bus } from "./eventBus";
 import * as gateway from "./gateway";
 import * as ah from "./agentHandler";
 import { detectRedactions } from "./dlp";
-import type { Env, GatewayContentItem, HistoryItem } from "./types";
+import type { Env, GatewayContentItem, HistoryItem, Tool } from "./types";
 
-const MAX_TURNS = 10;
+const MAX_TURNS = 18;
+
+// Dynamic per-message tool search has brittle recall (natural phrasing often returns
+// nothing) and only surfaces one system at a time. The demo spans systems — the
+// account/tier lives in Salesforce, what each plan includes (limits, quotas) in the
+// Notion entitlements guide, and known bugs in Jira — so on substantive turns we
+// guarantee this cross-system core toolkit, merged with the per-message search. Otherwise
+// the agent can't complete a multi-step answer like "tier from the account, then its
+// location limit from the guide."
+const CORE_INTENTS = [
+  "salesforce account plan tier subscription",
+  // `get_page` only returns a page's metadata — the numbers live in its blocks/tables,
+  // so we must surface the content-reading tools (get_block_children) and, if the guide
+  // is a database, the query tools too.
+  "notion read the contents of a page its blocks tables and rows",
+  "notion query a database table rows and entries",
+  "jira known issues bugs tickets status",
+];
+
+async function coreTools(env: Env, ruId: string): Promise<Tool[]> {
+  const lists = await Promise.all(CORE_INTENTS.map((intent) => ah.searchTools(env, ruId, intent)));
+  const seen = new Set<string>();
+  const out: Tool[] = [];
+  for (const list of lists) {
+    for (const t of list) {
+      if (!seen.has(t.name)) {
+        seen.add(t.name);
+        out.push(t);
+      }
+    }
+  }
+  return out;
+}
+
+// Pure greetings/pleasantries: kept tool-free so they route to the cheap model.
+function isTrivialGreeting(message: string): boolean {
+  return /^(hi|hello|hey|yo|hiya|howdy|sup|thanks|thank you|thx|good (morning|afternoon|evening))[\s!.?,]*$/i.test(
+    message.trim()
+  );
+}
+
+// The model occasionally emits a tool call as plain text; never show that raw blob.
+function looksLikeFabricatedToolCall(text: string): boolean {
+  return /"name"\s*:\s*"[\w./-]+"/.test(text) && /"(input|arguments)"\s*:/.test(text);
+}
 
 export interface Session {
   ruId: string | null;
@@ -48,7 +92,23 @@ export async function runTurn(env: Env, session: Session, userMessage: string): 
 
   session.history.push({ type: "message", role: "user", content: userMessage });
 
-  const tools = await ah.searchTools(env, session.ruId, userMessage);
+  // Re-route per user turn: clear any model pinned by a previous turn so the
+  // Gateway's intelligent routing re-evaluates THIS message's complexity (e.g.
+  // a trivial "hello" → cheap model, a tool-heavy question → premium model).
+  // We still pin to the routed model *within* the turn (below) so the tool-use
+  // loop stays coherent on one model across tool_result follow-ups.
+  session.model = "";
+
+  let tools = await ah.searchTools(env, session.ruId, userMessage);
+  if (!isTrivialGreeting(userMessage)) {
+    // Real question: guarantee the cross-system core toolkit (Salesforce account +
+    // Notion guides), merged with whatever the per-message search surfaced — so the
+    // agent can answer multi-step questions instead of guessing.
+    const names = new Set(tools.map((t) => t.name));
+    for (const t of await coreTools(env, session.ruId)) {
+      if (!names.has(t.name)) tools.push(t);
+    }
+  }
   bus.emit(
     "agent_handler",
     "tool_search",
@@ -95,7 +155,13 @@ export async function runTurn(env: Env, session: Session, userMessage: string): 
         session.history.push({ type: "tool_result", tool_use_id: item.id, content: result });
       }
     } else {
-      const text = (output.content[0] as GatewayContentItem | undefined)?.text ?? "";
+      let text = (output.content[0] as GatewayContentItem | undefined)?.text ?? "";
+
+      // Safety net: never surface a raw tool-call blob to the merchant.
+      if (looksLikeFabricatedToolCall(text)) {
+        text = "Sorry — I couldn't pull that up just now. Could you try rephrasing, or I can connect you with our team?";
+      }
+
       if (!text) {
         bus.emit("error", "error", "Gateway returned an empty final response", { output });
       }
@@ -169,11 +235,24 @@ export function startSession(env: Env, session: Session): Promise<{ ruId: string
 }
 
 export async function resetSession(env: Env, session: Session): Promise<Session> {
-  if (session.ruId) {
+  // Authoritative cleanup: delete every RU for this origin_user_id by looking
+  // it up against Agent Handler (the source of truth), not just the in-memory
+  // session.ruId. A dev-server restart loses ruId but the RU lives on in AH, so
+  // a ruId-only delete would silently leave it behind. Each call is best-effort
+  // — a lookup failure must not stop us deleting the id we already know.
+  const ids = new Set<string>();
+  if (session.ruId) ids.add(session.ruId);
+  try {
+    const existing = await ah.listRegisteredUsers(env, session.originUserId);
+    for (const ru of existing) ids.add(ru.id);
+  } catch (err) {
+    console.warn("[reset] RU lookup failed (continuing with in-memory id):", err);
+  }
+  for (const id of ids) {
     try {
-      await ah.deleteRegisteredUser(env, session.ruId);
+      await ah.deleteRegisteredUser(env, id);
     } catch (err) {
-      console.warn("[reset] deleteRegisteredUser failed (best-effort):", err);
+      console.warn(`[reset] deleteRegisteredUser(${id}) failed (best-effort):`, err);
     }
   }
   bus.clear();

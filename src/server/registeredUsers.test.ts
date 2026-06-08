@@ -13,8 +13,10 @@ describe("registered users", () => {
     vi.stubGlobal("fetch", fetchMock);
     const out = await listRegisteredUsers(env, "richard@acme.co");
     expect(out).toEqual([]);
+    // Must pass is_test=true: the demo key creates is_test=true RUs and the
+    // endpoint defaults to is_test=false, so without this the lookup is blind.
     expect(fetchMock.mock.calls[0][0]).toBe(
-      "https://ah-api.merge.dev/api/v1/registered-users/?origin_user_id=richard%40acme.co"
+      "https://ah-api.merge.dev/api/v1/registered-users/?origin_user_id=richard%40acme.co&is_test=true"
     );
   });
 

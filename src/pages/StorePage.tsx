@@ -1,23 +1,19 @@
+import TopBar from "../components/store/TopBar";
 import AcmeNav from "../components/store/AcmeNav";
 import AcmeLocations from "../components/store/AcmeLocations";
 import ChatWidget from "../components/store/ChatWidget";
 
 export default function StorePage() {
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-neutral-50 text-neutral-900">
-      <AcmeNav />
-      <main className="flex-1 flex overflow-y-auto">
-        <AcmeLocations />
-      </main>
+    <div className="flex flex-col h-screen w-screen overflow-hidden bg-neutral-100 text-neutral-900">
+      <TopBar />
+      <div className="flex-1 flex overflow-hidden">
+        <AcmeNav />
+        <main className="flex-1 overflow-y-auto">
+          <AcmeLocations />
+        </main>
+      </div>
       <ChatWidget />
-      <a
-        href="/console"
-        target="_blank"
-        rel="noreferrer"
-        className="fixed top-3 right-4 text-xs text-neutral-400 hover:text-neutral-600"
-      >
-        open monitoring console ↗
-      </a>
     </div>
   );
 }

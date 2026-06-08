@@ -21,11 +21,27 @@ export async function searchTools(
     headers: authHeaders(env),
     body: JSON.stringify({ intent: intent.slice(0, MAX_INTENT_LEN), max_results: maxResults }),
   });
-  if (!res.ok) return []; // proceed without tools, like the python client
-  const data = (await res.json()) as {
-    tools?: { fully_qualified_name: string; description: string; input_schema: unknown }[];
-  };
-  return (data.tools ?? []).map((t) => ({
+  const raw = await res.text();
+  if (!res.ok) {
+    // proceed without tools, like the python client — but say WHY (silent [] hid
+    // real errors: the model then fabricates a tool call as plain text).
+    console.warn(`[searchTools] AH /search/ ${res.status} ${res.statusText} — no tools. Body: ${raw.slice(0, 500)}`);
+    return [];
+  }
+  let data: { tools?: { fully_qualified_name: string; description: string; input_schema: unknown }[] };
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    console.warn(`[searchTools] AH /search/ 200 but body was not JSON. Body: ${raw.slice(0, 500)}`);
+    return [];
+  }
+  const found = data.tools ?? [];
+  if (found.length === 0) {
+    // 200 with nothing usable: either genuinely no match, or the response shape
+    // drifted (tools under a different key). The raw body tells us which.
+    console.warn(`[searchTools] AH /search/ 200 but parsed 0 tools for "${intent.slice(0, 80)}". Raw: ${raw.slice(0, 800)}`);
+  }
+  return found.map((t) => ({
     type: "function",
     name: t.fully_qualified_name,
     description: t.description,
@@ -66,7 +82,11 @@ export interface NewRegisteredUser {
 }
 
 export async function listRegisteredUsers(env: Env, originUserId: string): Promise<RegisteredUser[]> {
-  const url = `${RU_URL}?origin_user_id=${encodeURIComponent(originUserId)}`;
+  // is_test=true is REQUIRED: the demo's AH key creates is_test=true registered
+  // users, but this endpoint defaults to is_test=false. Without it the lookup
+  // never sees the RUs we create — startSession would always re-create (and 400
+  // once the RU exists), and reset could never find the RU to delete it.
+  const url = `${RU_URL}?origin_user_id=${encodeURIComponent(originUserId)}&is_test=true`;
   const res = await fetch(url, { headers: authHeaders(env) });
   if (!res.ok) throw new Error(`AH list RU ${res.status} ${res.statusText}: ${await res.text()}`);
   const data = (await res.json()) as { results?: RegisteredUser[] };

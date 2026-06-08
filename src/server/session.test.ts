@@ -71,6 +71,88 @@ describe("runTurn", () => {
     expect(bus.getLog().map((e) => e.kind)).toEqual(["tool_search", "route", "message"]);
     expect(s.history.length).toBe(3); // system + user + assistant(text)
   });
+
+  it("attaches the cross-system core toolkit (Salesforce + Notion) on a substantive turn", async () => {
+    const s = createSession(env);
+    s.ruId = "ru_1";
+
+    // Per-message search misses; the core intents surface Salesforce + Notion tools,
+    // including the content-reading tool that lets the agent read a guide's body.
+    const search = vi
+      .spyOn(ah, "searchTools")
+      .mockResolvedValueOnce([]) // per-message search
+      .mockResolvedValueOnce([
+        { type: "function", name: "salesforce__get_account", description: "d", parameters: {} },
+      ]) // core: account / tier
+      .mockResolvedValueOnce([
+        { type: "function", name: "notion__get_block_children", description: "d", parameters: {} },
+      ]) // core: page contents
+      .mockResolvedValueOnce([
+        { type: "function", name: "notion__query_database", description: "d", parameters: {} },
+      ]) // core: database
+      .mockResolvedValueOnce([
+        { type: "function", name: "jira__search_issues", description: "d", parameters: {} },
+      ]); // core: known bugs
+    vi.spyOn(ah, "callTool").mockResolvedValue('{"plan":"Tier 3"}');
+
+    const chat = vi.spyOn(gateway, "chat");
+    chat.mockResolvedValueOnce({
+      model: "anthropic/claude-opus-4-7",
+      output: [{ finish_reason: "tool_use", content: [{ type: "tool_use", id: "tu_1", name: "salesforce__get_account", input: {} }] }],
+    });
+    chat.mockResolvedValueOnce({
+      model: "anthropic/claude-opus-4-7",
+      output: [{ finish_reason: "stop", content: [{ type: "text", text: "You're on Tier 3." }] }],
+    });
+
+    const text = await runTurn(env, s, "why can't I add a third location?");
+
+    expect(text).toBe("You're on Tier 3.");
+    expect(search).toHaveBeenCalledTimes(5); // per-message search + 4 core intents
+    const toolNames = (chat.mock.calls[0][3] as { name: string }[]).map((t) => t.name);
+    expect(toolNames).toEqual(
+      expect.arrayContaining(["salesforce__get_account", "notion__get_block_children", "jira__search_issues"])
+    );
+    expect(bus.getLog().map((e) => e.kind)).toContain("tool_call");
+  });
+
+  it("keeps a greeting tool-free (no core fallback)", async () => {
+    const s = createSession(env);
+    s.ruId = "ru_1";
+    const search = vi.spyOn(ah, "searchTools").mockResolvedValue([]);
+    vi.spyOn(gateway, "chat").mockResolvedValue({
+      model: "openai/gpt-5-nano",
+      output: [{ finish_reason: "stop", content: [{ type: "text", text: "Hi there!" }] }],
+    });
+
+    const text = await runTurn(env, s, "hello");
+    expect(text).toBe("Hi there!");
+    expect(search).toHaveBeenCalledTimes(1); // no core fallback for a greeting
+  });
+
+  it("re-routes on every user turn instead of pinning the first turn's model", async () => {
+    const s = createSession(env);
+    s.ruId = "ru_1";
+    vi.spyOn(ah, "searchTools").mockResolvedValue([]);
+    const chat = vi
+      .spyOn(gateway, "chat")
+      .mockResolvedValueOnce({
+        model: "moonshot/kimi-k2",
+        output: [{ finish_reason: "stop", content: [{ type: "text", text: "Hi!" }] }],
+      })
+      .mockResolvedValueOnce({
+        model: "anthropic/claude-opus-4-7",
+        output: [{ finish_reason: "stop", content: [{ type: "text", text: "Detailed." }] }],
+      });
+
+    await runTurn(env, s, "hello"); // cheap turn pins moonshot/kimi-k2 within the turn
+    await runTurn(env, s, "Why am I blocked from adding a third location?");
+
+    // Each turn must start UNPINNED (model "") so the Gateway re-routes on the new
+    // message. The bug: turn 2 was called with "moonshot/kimi-k2", bypassing routing.
+    expect(chat.mock.calls[0][1]).toBe("");
+    expect(chat.mock.calls[1][1]).toBe("");
+  });
 });
 
 describe("startSession", () => {
@@ -113,6 +195,9 @@ describe("resetSession", () => {
     const s = createSession(env);
     s.ruId = "ru_old";
     s.history.push({ type: "message", role: "user", content: "hi" });
+    vi.spyOn(ah, "listRegisteredUsers").mockResolvedValue([
+      { id: "ru_old", origin_user_id: env.DEMO_USER_ORIGIN_ID },
+    ]);
     const delSpy = vi.spyOn(ah, "deleteRegisteredUser").mockResolvedValue(undefined);
     bus.emit("identity", "login", "noise");
 
@@ -122,6 +207,33 @@ describe("resetSession", () => {
     expect(bus.getLog()).toEqual([]);
     expect(fresh.ruId).toBeNull();
     expect(fresh.history).toHaveLength(1); // system message only
+  });
+
+  it("cleans up RUs found by lookup even when in-memory ruId is null (server restart)", async () => {
+    bus.clear();
+    const s = createSession(env);
+    s.ruId = null; // dev server restarted since the RU was created
+    vi.spyOn(ah, "listRegisteredUsers").mockResolvedValue([
+      { id: "ru_orphan", origin_user_id: env.DEMO_USER_ORIGIN_ID },
+    ]);
+    const delSpy = vi.spyOn(ah, "deleteRegisteredUser").mockResolvedValue(undefined);
+
+    await resetSession(env, s);
+
+    expect(delSpy).toHaveBeenCalledWith(env, "ru_orphan");
+  });
+
+  it("still deletes the in-memory ruId when the lookup fails (best-effort)", async () => {
+    bus.clear();
+    const s = createSession(env);
+    s.ruId = "ru_old";
+    vi.spyOn(ah, "listRegisteredUsers").mockRejectedValue(new Error("AH list 500"));
+    const delSpy = vi.spyOn(ah, "deleteRegisteredUser").mockResolvedValue(undefined);
+
+    const fresh = await resetSession(env, s);
+
+    expect(delSpy).toHaveBeenCalledWith(env, "ru_old");
+    expect(fresh.ruId).toBeNull();
   });
 });
 

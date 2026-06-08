@@ -85,7 +85,7 @@ docs/superpowers/plans/2026-06-01-vhol-demo.md          # the implementation pla
 ## Open items (verify on first live run — need real keys + connectors)
 
 1. **DLP redaction shape** — confirm how Agent Handler surfaces a redaction in the `/mcp/` response and that `src/server/dlp.ts` detects it; adjust `REDACTION_MARKERS` if the real shape differs.
-2. **RU delete endpoint** — confirm `DELETE /api/v1/registered-users/{id}/` works for the Reset button; fallback is rotating `origin_user_id` so the lookup returns empty and re-triggers create.
+2. ~~**RU delete endpoint**~~ ✅ RESOLVED (2026-06-03). `DELETE /api/v1/registered-users/{id}/` works (verified live: create→delete→gone). Two real bugs fixed: (a) **the AH key creates `is_test=true` RUs, but the list endpoint defaults to `is_test=false`** — `listRegisteredUsers` now appends `is_test=true` or the lookup is blind to our own RUs; (b) `resetSession` now deletes by **API lookup on `origin_user_id`** (source of truth), not just the in-memory `session.ruId`, so a dev-server restart no longer orphans the RU. NOTE: `is_test=true` is hardcoded — if the demo ever runs on a *production* AH key, the lookup must flip to `is_test=false`.
 
 ## Related local projects (not in this repo)
 

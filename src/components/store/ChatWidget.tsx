@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { startSession, sendChat } from "../../lib/api";
 
 interface Msg {
@@ -13,6 +13,15 @@ export default function ChatWidget() {
   const [busy, setBusy] = useState(false);
   const [ready, setReady] = useState(false);
   const startedRef = useRef(false);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  // Auto-grow the input to fit its text (up to a cap), instead of scrolling.
+  useLayoutEffect(() => {
+    const ta = inputRef.current;
+    if (!ta) return;
+    ta.style.height = "auto";
+    ta.style.height = `${Math.min(ta.scrollHeight, 160)}px`;
+  }, [input]);
 
   async function openPanel() {
     setOpen(true);
@@ -62,16 +71,16 @@ export default function ChatWidget() {
   }
 
   return (
-    <div className="fixed bottom-4 right-4 w-72 bg-white border border-neutral-200 rounded-xl shadow-2xl overflow-hidden flex flex-col">
-      <div className="bg-gradient-to-br from-blue-500 to-violet-500 text-white px-3 py-2 font-semibold text-sm flex justify-between">
+    <div className="fixed bottom-4 right-4 w-[440px] h-[80vh] max-h-[760px] bg-white border border-neutral-200 rounded-xl shadow-2xl overflow-hidden flex flex-col">
+      <div className="bg-gradient-to-br from-blue-500 to-violet-500 text-white px-4 py-3 font-semibold text-base flex justify-between">
         <span>Acme Assistant</span>
         <button aria-label="Close chat" onClick={() => setOpen(false)}>—</button>
       </div>
-      <div className="p-3 flex-1 max-h-80 overflow-y-auto text-sm space-y-2">
+      <div className="p-4 flex-1 overflow-y-auto text-sm space-y-3">
         {messages.map((m, i) => (
           <div
             key={i}
-            className={`rounded-lg px-3 py-2 ${m.role === "user" ? "bg-blue-50 ml-6" : "bg-neutral-100 mr-6"}`}
+            className={`rounded-lg px-3 py-2 whitespace-pre-wrap break-words ${m.role === "user" ? "bg-blue-50 ml-8" : "bg-neutral-100 mr-8"}`}
           >
             {m.text}
           </div>
@@ -79,20 +88,27 @@ export default function ChatWidget() {
         {!ready && messages.length === 0 && <div className="text-neutral-400 text-xs">Connecting…</div>}
         {busy && <div className="text-neutral-400 text-xs">Acme Assistant is thinking…</div>}
       </div>
-      <div className="border-t border-neutral-100 p-2 flex gap-2">
-        <input
-          className="flex-1 text-sm outline-none px-2 disabled:opacity-50"
+      <div className="border-t border-neutral-100 p-2 flex gap-2 items-end">
+        <textarea
+          ref={inputRef}
+          className="flex-1 text-sm outline-none px-2 py-1 resize-none disabled:opacity-50 min-h-[2.75rem] max-h-40 overflow-y-auto leading-snug"
           placeholder={ready ? "Ask anything…" : "Connecting…"}
           value={input}
           disabled={!ready}
+          rows={1}
           onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && send()}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              send();
+            }
+          }}
         />
         <button
           aria-label="Send"
           onClick={send}
           disabled={!ready}
-          className="text-blue-600 font-semibold text-sm px-2 disabled:opacity-50"
+          className="text-blue-600 font-semibold text-sm px-2 pb-1 disabled:opacity-50"
         >
           Send
         </button>
